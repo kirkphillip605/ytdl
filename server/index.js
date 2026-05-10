@@ -3,12 +3,14 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { YtDlp } from 'ytdlp-nodejs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -24,33 +26,42 @@ const supabase = createClient(
 app.use(cors());
 app.use(express.json());
 
-// Ensure downloads directory exists in the project root
+// Ensure downloads directory exists
 const downloadsDir = path.join(__dirname, '../downloads');
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
 
-/**
- * CRITICAL: Serve the downloads directory as static files
- * This allows the frontend to link directly to the .mp4 files
- */
+// Serve downloads folder as static files
 app.use('/files', express.static(downloadsDir));
 
-const ytdlp = new YtDlp();
+/**
+ * Helper to execute yt-dlp commands
+ */
+async function runYtDlp(args) {
+  // Join arguments and escape them properly for the shell
+  const command = `yt-dlp ${args.join(' ')}`;
+  console.log(`Executing: ${command}`);
+  const { stdout, stderr } = await execAsync(command);
+  if (stderr && !stdout) throw new Error(stderr);
+  return stdout;
+}
 
-// Search YouTube
+// Search YouTube using the exact command pattern provided by the user
 app.post('/api/search', async (req, res) => {
   const { query } = req.body;
+  if (!query) return res.status(400).json({ error: 'Query is required' });
+
   try {
-    const results = await ytdlp.exec([
-      `ytsearch5:${query}`,
+    // Use the exact flags: ytsearch5, --dump-json, --flat-playlist, --no-warnings
+    const output = await runYtDlp([
+      `"ytsearch5:${query.replace(/"/g, '')}"`,
       '--dump-json',
       '--flat-playlist',
       '--no-warnings'
     ]);
     
-    const output = typeof results === 'string' ? results : String(results);
-    
+    // yt-dlp returns one JSON object per line for search results
     const videos = output.split('\n')
       .filter(line => line.trim())
       .map(line => {
@@ -71,33 +82,27 @@ app.post('/api/search', async (req, res) => {
     res.json(videos);
   } catch (error) {
     console.error('Search error:', error);
-    res.status(500).json({ error: 'Failed to search YouTube' });
+    res.status(500).json({ error: 'Failed to search YouTube. Ensure yt-dlp is installed in your PATH.' });
   }
 });
 
 // Download Video Logic
-async function performDownload(url, artist, title) {
-  // Strict naming convention: {artist} - {title} [YT].mp4
-  const fileName = `${artist} - ${title} [YT].mp4`;
-  const filePath = path.join(downloadsDir, fileName);
-
-  await ytdlp.exec([
-    url,
-    '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-    '--merge-output-format', 'mp4',
-    '-o', filePath,
-    '--no-playlist',
-    '--no-warnings'
-  ]);
-
-  return fileName;
-}
-
 app.post('/api/download', async (req, res) => {
   const { url, artist, title, thumbnailUrl } = req.body;
 
   try {
-    const fileName = await performDownload(url, artist, title);
+    const fileName = `${artist} - ${title} [YT].mp4`;
+    const filePath = path.join(downloadsDir, fileName);
+
+    // Execute download command
+    await runYtDlp([
+      `"${url}"`,
+      '-f', '"bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"',
+      '--merge-output-format', 'mp4',
+      '-o', `"${filePath}"`,
+      '--no-playlist',
+      '--no-warnings'
+    ]);
 
     const { data, error } = await supabase
       .from('downloads')
@@ -124,7 +129,6 @@ app.post('/api/download', async (req, res) => {
 
 app.get('/api/status/:id', async (req, res) => {
   const { id } = req.params;
-
   try {
     const { data: record, error } = await supabase
       .from('downloads')
@@ -140,7 +144,6 @@ app.get('/api/status/:id', async (req, res) => {
     res.json({ 
       exists, 
       record,
-      // Construct the full URL for the frontend to download
       downloadUrl: exists ? `/files/${encodeURIComponent(record.file_path)}` : null 
     });
   } catch (error) {
@@ -150,7 +153,6 @@ app.get('/api/status/:id', async (req, res) => {
 
 app.post('/api/regenerate/:id', async (req, res) => {
   const { id } = req.params;
-
   try {
     const { data: record, error: fetchError } = await supabase
       .from('downloads')
@@ -160,14 +162,20 @@ app.post('/api/regenerate/:id', async (req, res) => {
 
     if (fetchError || !record) return res.status(404).json({ error: 'Record not found' });
 
-    await performDownload(record.youtube_url, record.artist, record.title);
+    const filePath = path.join(downloadsDir, record.file_path);
+    await runYtDlp([
+      `"${record.youtube_url}"`,
+      '-f', '"bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"',
+      '--merge-output-format', 'mp4',
+      '-o', `"${filePath}"`,
+      '--no-playlist',
+      '--no-warnings'
+    ]);
 
-    const { error: updateError } = await supabase
+    await supabase
       .from('downloads')
       .update({ created_at: new Date().toISOString() })
       .eq('id', id);
-
-    if (updateError) throw updateError;
 
     res.json({ success: true });
   } catch (error) {
