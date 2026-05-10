@@ -13,7 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Supabase setup
 const supabase = createClient(
@@ -24,15 +24,18 @@ const supabase = createClient(
 app.use(cors());
 app.use(express.json());
 
+// Ensure downloads directory exists in the project root
 const downloadsDir = path.join(__dirname, '../downloads');
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir, { recursive: true });
 }
 
-// Serve static files from downloads directory
+/**
+ * CRITICAL: Serve the downloads directory as static files
+ * This allows the frontend to link directly to the .mp4 files
+ */
 app.use('/files', express.static(downloadsDir));
 
-// Fixed: Correct class name is YtDlp
 const ytdlp = new YtDlp();
 
 // Search YouTube
@@ -42,12 +45,28 @@ app.post('/api/search', async (req, res) => {
     const results = await ytdlp.exec([
       `ytsearch5:${query}`,
       '--dump-json',
-      '--flat-playlist'
+      '--flat-playlist',
+      '--no-warnings'
     ]);
     
-    const videos = results.split('\n')
+    const output = typeof results === 'string' ? results : String(results);
+    
+    const videos = output.split('\n')
       .filter(line => line.trim())
-      .map(line => JSON.parse(line));
+      .map(line => {
+        try {
+          const data = JSON.parse(line);
+          return {
+            id: data.id,
+            title: data.title,
+            url: data.url || `https://www.youtube.com/watch?v=${data.id}`,
+            thumbnails: data.thumbnails || [{ url: `https://i.ytimg.com/vi/${data.id}/hqdefault.jpg` }]
+          };
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter(v => v !== null);
 
     res.json(videos);
   } catch (error) {
@@ -56,8 +75,9 @@ app.post('/api/search', async (req, res) => {
   }
 });
 
-// Download Video
+// Download Video Logic
 async function performDownload(url, artist, title) {
+  // Strict naming convention: {artist} - {title} [YT].mp4
   const fileName = `${artist} - ${title} [YT].mp4`;
   const filePath = path.join(downloadsDir, fileName);
 
@@ -66,7 +86,8 @@ async function performDownload(url, artist, title) {
     '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
     '--merge-output-format', 'mp4',
     '-o', filePath,
-    '--no-playlist'
+    '--no-playlist',
+    '--no-warnings'
   ]);
 
   return fileName;
@@ -119,6 +140,7 @@ app.get('/api/status/:id', async (req, res) => {
     res.json({ 
       exists, 
       record,
+      // Construct the full URL for the frontend to download
       downloadUrl: exists ? `/files/${encodeURIComponent(record.file_path)}` : null 
     });
   } catch (error) {

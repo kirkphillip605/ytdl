@@ -3,7 +3,8 @@ import { Search, History as HistoryIcon, Download, Music, User, Play, RefreshCw,
 import { supabase } from './lib/supabase';
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:3001/api';
+// Use relative paths so Vite proxy handles the port mapping
+const API_BASE = '/api';
 
 interface Video {
   id: string;
@@ -78,7 +79,7 @@ export default function App() {
     if (!selectedVideo || !metadata.artist || !metadata.title) return;
 
     setIsDownloading(true);
-    setDownloadProgress(10); // Initial progress
+    setDownloadProgress(10);
     
     try {
       await axios.post(`${API_BASE}/download`, {
@@ -111,7 +112,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white font-sans">
-      {/* Navigation */}
       <nav className="border-b border-zinc-800 bg-[#0d0d0d] sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -141,7 +141,6 @@ export default function App() {
       <main className="max-w-6xl mx-auto px-4 py-8">
         {activeTab === 'search' ? (
           <div className="space-y-8">
-            {/* Search Bar */}
             <form onSubmit={handleSearch} className="relative max-w-2xl mx-auto">
               <input 
                 type="text"
@@ -159,7 +158,6 @@ export default function App() {
               </button>
             </form>
 
-            {/* Results Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {searchResults.map((video) => (
                 <div 
@@ -238,7 +236,7 @@ export default function App() {
                       <td className="px-6 py-4 text-right">
                         {item.status === 'ready' ? (
                           <a 
-                            href={`http://localhost:3001/files/${encodeURIComponent(item.file_path)}`}
+                            href={`/files/${encodeURIComponent(item.file_path)}`}
                             download
                             className="inline-flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                           >
@@ -262,7 +260,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Metadata Modal */}
       {selectedVideo && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
           <div className="bg-zinc-900 border border-zinc-800 w-full max-w-md rounded-3xl overflow-hidden shadow-2xl">
